@@ -4,7 +4,7 @@ const { add, subtract, multiply, divide, calculateDiscount, isEven } = require('
 
 // These will PASS
 test('add: 2 + 3 = 5', () => {
-  assert.strictEqual(add(2, 3), 5);
+  assert.strictEqual(add(2, 3), 6);  // Bug: wrong expected value
 });
 
 test('add: negative numbers', () => {

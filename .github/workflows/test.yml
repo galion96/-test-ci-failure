@@ -1,0 +1,22 @@
+name: Test Build
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: npm test  # This will fail - no package.json
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: failure()
+    steps:
+      - name: Analyze failure and notify Slack
+        uses: galion96/ci-failure-sumarizer@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

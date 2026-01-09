@@ -6,7 +6,7 @@ on:
 
 jobs:
   apply-fix:
-    if: github.event.comment.body == '/apply-fix' && contains(github.event.issue.labels.*.name, 'auto-fix')
+    if: (github.event.comment.body == '/apply-fix' || github.event.comment.body == '/commit-fix') && contains(github.event.issue.labels.*.name, 'auto-fix')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -32,9 +32,11 @@ jobs:
             core.setOutput('replace', fix.replace);
             core.setOutput('branch', fix.branch);
             core.setOutput('description', fix.description || 'Fix CI failure');
+            core.setOutput('command', context.payload.comment.body);
             console.log('Fix metadata:', fix);
+            console.log('Command:', context.payload.comment.body);
 
-      - name: Apply fix and create PR
+      - name: Apply fix
         uses: actions/github-script@v7
         with:
           script: |
@@ -44,6 +46,8 @@ jobs:
             const replace = `${{ steps.extract.outputs.replace }}`;
             const branch = '${{ steps.extract.outputs.branch }}';
             const description = '${{ steps.extract.outputs.description }}';
+            const command = '${{ steps.extract.outputs.command }}';
+            const isCommitDirect = command === '/commit-fix';
 
             // Read file
             let content = fs.readFileSync(file, 'utf-8');
@@ -55,61 +59,99 @@ jobs:
             }
             content = content.replace(search, replace);
 
-            // Create branch
-            const fixBranch = `fix/issue-${context.payload.issue.number}`;
-            const { data: ref } = await github.rest.git.getRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: `heads/${branch}`
-            });
+            if (isCommitDirect) {
+              // Commit directly to the branch
+              console.log(`Committing fix directly to ${branch}...`);
 
-            try {
-              await github.rest.git.createRef({
+              // Get current file SHA
+              const { data: fileData } = await github.rest.repos.getContent({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: `refs/heads/${fixBranch}`,
-                sha: ref.object.sha
+                path: file,
+                ref: branch
               });
-            } catch (e) {
-              if (e.status !== 422) throw e; // Branch already exists, continue
+
+              // Commit fix
+              const { data: commit } = await github.rest.repos.createOrUpdateFileContents({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: file,
+                message: `🤖 ${description}\n\nFixes #${context.payload.issue.number}`,
+                content: Buffer.from(content).toString('base64'),
+                sha: fileData.sha,
+                branch: branch
+              });
+
+              // Comment on issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body: `✅ Fix committed directly to \`${branch}\`: ${commit.commit.html_url}`
+              });
+
+              console.log(`Committed fix: ${commit.commit.sha}`);
+            } else {
+              // Create a PR
+              console.log(`Creating PR for fix...`);
+
+              const fixBranch = `fix/issue-${context.payload.issue.number}`;
+              const { data: ref } = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `heads/${branch}`
+              });
+
+              try {
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/heads/${fixBranch}`,
+                  sha: ref.object.sha
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e;
+              }
+
+              // Get current file SHA
+              const { data: fileData } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: file,
+                ref: branch
+              });
+
+              // Commit fix
+              await github.rest.repos.createOrUpdateFileContents({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: file,
+                message: `🤖 ${description}\n\nFixes #${context.payload.issue.number}`,
+                content: Buffer.from(content).toString('base64'),
+                sha: fileData.sha,
+                branch: fixBranch
+              });
+
+              // Create PR
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🤖 ${description}`,
+                body: `Applies fix from #${context.payload.issue.number}\n\n---\n_Auto-generated by CI Failure Summarizer_`,
+                head: fixBranch,
+                base: branch
+              });
+
+              // Comment on issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body: `✅ Fix PR created: ${pr.html_url}`
+              });
+
+              console.log(`Created PR: ${pr.html_url}`);
             }
-
-            // Get current file SHA
-            const { data: fileData } = await github.rest.repos.getContent({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: file,
-              ref: branch
-            });
-
-            // Commit fix
-            await github.rest.repos.createOrUpdateFileContents({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: file,
-              message: `🤖 ${description}\n\nFixes #${context.payload.issue.number}`,
-              content: Buffer.from(content).toString('base64'),
-              sha: fileData.sha,
-              branch: fixBranch
-            });
-
-            // Create PR
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `🤖 ${description}`,
-              body: `Applies fix from #${context.payload.issue.number}\n\n---\n_Auto-generated by CI Failure Summarizer_`,
-              head: fixBranch,
-              base: branch
-            });
-
-            // Comment on issue
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
-              body: `✅ Fix PR created: ${pr.html_url}`
-            });
 
             // Close issue
             await github.rest.issues.update({
@@ -118,5 +160,3 @@ jobs:
               issue_number: context.payload.issue.number,
               state: 'closed'
             });
-
-            console.log(`Created PR: ${pr.html_url}`);

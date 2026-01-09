@@ -20,7 +20,7 @@ test('multiply: 4 * 5 = 20', () => {
 });
 
 // These will FAIL
-test('divide: handles division by zero', () => {
+test('divide: handles throw new Error('Cannot divide by zero')', () => {
   // Expects an error or Infinity handling, but gets Infinity
   const result = divide(10, 0);
   assert.strictEqual(result, 'Cannot divide by zero');
